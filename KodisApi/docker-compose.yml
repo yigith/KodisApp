@@ -1,0 +1,14 @@
+﻿version: '3.8'
+
+services:
+  KodisTest:
+    image: kodis-test-image
+    container_name: kodis-test-container
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+    ports:
+      - "3333:80"
+    restart: always
+    build:
+      context: .
+      dockerfile: Dockerfile
