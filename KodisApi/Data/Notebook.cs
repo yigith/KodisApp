@@ -22,7 +22,11 @@
 
         public string? EditPasswordHash { get; set; }
 
+        public string? NotebookUserId { get; set; }
+
 
         public List<Note> Notes { get; set; } = new();
+
+        public NotebookUser? NotebookUser { get; set; }
     }
 }

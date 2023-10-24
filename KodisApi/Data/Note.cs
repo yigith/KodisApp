@@ -17,6 +17,8 @@ namespace KodisApi.Data
 
         public DateTimeOffset ModifiedDate { get; set; } = DateTimeOffset.Now;
 
+        public bool IsPrivate { get; set; } = false;
+
 
         public Notebook Notebook { get; set; } = null!;
     }

@@ -6,8 +6,9 @@ global using KodisApi.Dtos;
 global using KodisApi.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
-
 // Add services to the container.
+builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.WithOrigins(
+    "https://kod.is", "http://localhost:5173").AllowAnyMethod().AllowAnyHeader()));
 builder.Services.AddDbContext<ApplicationDbContext>(o => o.UseNpgsql(
     builder.Configuration.GetConnectionString("ApplicationDbContext")));
 builder.Services.AddSingleton(new SqidsEncoder<int>(new()
@@ -31,6 +32,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.UseCors();
 
 app.UseAuthorization();
 

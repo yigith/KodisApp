@@ -20,7 +20,10 @@ namespace KodisApi.Controllers
         [HttpGet("{slug}")]
         public ActionResult<NotebookDto> GetNotebook(string slug)
         {
-            var notebook = _db.Notebooks.Include(x => x.Notes).FirstOrDefault(x => x.Slug == slug);
+            var notebook = _db.Notebooks
+                .Include(x => x.Notes)
+                .FirstOrDefault(x => x.Slug == slug && x.ExpireDate > DateTimeOffset.Now);
+
             if (notebook == null)
                 return NotFound();
 
