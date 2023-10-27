@@ -3,6 +3,7 @@ using Google.Apis.Auth.OAuth2;
 using Google.Apis.Oauth2.v2;
 using Google.Apis.Oauth2.v2.Data;
 using Google.Apis.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using static Google.Apis.Auth.GoogleJsonWebSignature;
@@ -14,13 +15,22 @@ namespace KodisApi.Controllers
     public class AccountController : ControllerBase
     {
         private readonly IConfiguration _configuration;
+        private readonly JwtService _jwtService;
 
         private string GoogleClientId => _configuration["Google:ClientId"]!;
 
-        public AccountController(IConfiguration configuration)
+        public AccountController(IConfiguration configuration, JwtService jwtService)
         {
             _configuration = configuration;
+            _jwtService = jwtService;
         }
+
+        [Authorize, HttpPost("Check")]
+        public IActionResult Get()
+        {
+            return Ok();
+        }
+
 
         [HttpPost("GoogleSigninByGoogleOneTap")]
         public async Task<IActionResult> GoogleSigninByGoogleOneTap(GoogleOneTapCredentialResponse dto)
@@ -32,21 +42,9 @@ namespace KodisApi.Controllers
                 return Unauthorized();
             }
 
-            // map valid payload to notebookuser without auto mapper
-            var user = new NotebookUser
-            {
-                Email = validPayload.Email,
-                FullName = validPayload.Name,
-                Picture = validPayload.Picture,
-                Locale = validPayload.Locale,
-                FamilyName = validPayload.FamilyName,
-                GivenName = validPayload.GivenName,
-                Sub = validPayload.Subject,
-                EmailVerified = validPayload.EmailVerified,
-                LoginMethod = LoginMethod.Google
-            };
+            var token = _jwtService.GenerateJwtToken(validPayload.ToNotebookUser());
 
-            return Ok(user);
+            return Ok(new { token });
         }
 
         [HttpPost("GoogleSigninByTokenResponse")]
@@ -59,21 +57,9 @@ namespace KodisApi.Controllers
                 return Unauthorized();
             }
 
-            // map userinfo to notebookuser without auto mapper
-            var user = new NotebookUser
-            {
-                Email = userinfo.Email,
-                FullName = userinfo.Name,
-                Picture = userinfo.Picture,
-                Locale = userinfo.Locale,
-                FamilyName = userinfo.FamilyName,
-                GivenName = userinfo.GivenName,
-                Sub = userinfo.Id,
-                EmailVerified = userinfo.VerifiedEmail ?? false,
-                LoginMethod = LoginMethod.Google
-            };
+            var token = _jwtService.GenerateJwtToken(userinfo.ToNotebookUser());
 
-            return Ok(user);
+            return Ok(new { token });
         }
 
         private async Task<Userinfo?> GetUserInfo(string accessToken)
