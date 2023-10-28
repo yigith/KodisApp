@@ -8,6 +8,8 @@
 
         public string Audience { get; set; } = null!;
 
-        public int ExpirationTimeInMinutes { get; set; }
+        public int AccessExpirationTimeInMinutes { get; set; }
+
+        public int RefreshExpirationTimeInMinutes { get; set; }
     }
 }

@@ -6,6 +6,7 @@ using Google.Apis.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 using static Google.Apis.Auth.GoogleJsonWebSignature;
 
 namespace KodisApi.Controllers
@@ -16,24 +17,28 @@ namespace KodisApi.Controllers
     {
         private readonly IConfiguration _configuration;
         private readonly JwtService _jwtService;
+        private readonly ApplicationDbContext _db;
 
         private string GoogleClientId => _configuration["Google:ClientId"]!;
 
-        public AccountController(IConfiguration configuration, JwtService jwtService)
+        public AccountController(IConfiguration configuration, JwtService jwtService, ApplicationDbContext db)
         {
             _configuration = configuration;
             _jwtService = jwtService;
+            _db = db;
         }
 
         [Authorize, HttpPost("Check")]
         public IActionResult Get()
         {
+            var isLoggedIn = User.Identity?.IsAuthenticated ?? false;
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             return Ok();
         }
 
 
         [HttpPost("GoogleSigninByGoogleOneTap")]
-        public async Task<IActionResult> GoogleSigninByGoogleOneTap(GoogleOneTapCredentialResponse dto)
+        public async Task<ActionResult<TokensDto>> GoogleSigninByGoogleOneTap(GoogleOneTapCredentialResponse dto)
         {
             Payload validPayload = await GoogleJsonWebSignature.ValidateAsync(dto.Credential);
 
@@ -42,13 +47,12 @@ namespace KodisApi.Controllers
                 return Unauthorized();
             }
 
-            var token = _jwtService.GenerateJwtToken(validPayload.ToNotebookUser());
-
-            return Ok(new { token });
+            var user = CreateOrUpdateUser(validPayload.ToNotebookUser());
+            return _jwtService.GenerateJwtToken(user);
         }
 
         [HttpPost("GoogleSigninByTokenResponse")]
-        public async Task<IActionResult> GoogleSigninByTokenResponse(GoogleTokenResponse dto)
+        public async Task<ActionResult<TokensDto>> GoogleSigninByTokenResponse(GoogleTokenResponse dto)
         {
             var userinfo = await GetUserInfo(dto.Access_Token);
 
@@ -57,9 +61,47 @@ namespace KodisApi.Controllers
                 return Unauthorized();
             }
 
-            var token = _jwtService.GenerateJwtToken(userinfo.ToNotebookUser());
+            var user = CreateOrUpdateUser(userinfo.ToNotebookUser());
+            return _jwtService.GenerateJwtToken(user);
+        }
 
-            return Ok(new { token });
+        [HttpPost("RefreshLogin")]
+        public async Task<ActionResult<TokensDto>> RefreshLogin(RefreshLoginDto dto)
+        {
+            try
+            {
+                return _jwtService.RefreshJwtToken(dto.RefreshToken);
+
+            }
+            catch (Exception e)
+            {
+                return BadRequest(e.Message);
+            }
+        }   
+
+        private NotebookUser CreateOrUpdateUser(NotebookUser user)
+        {
+            var userDb = _db.NotebookUsers.FirstOrDefault(u => u.Email == user.Email);
+
+            if (userDb == null)
+            {
+                _db.NotebookUsers.Add(user);
+                _db.SaveChanges();
+                return user;
+            }
+
+            userDb.Sub = user.Sub;
+            userDb.FamilyName = user.FamilyName;
+            userDb.GivenName = user.GivenName;
+            userDb.Locale = user.Locale;
+            userDb.FullName = user.FullName;
+            userDb.Picture = user.Picture;
+            userDb.EmailVerified = user.EmailVerified;
+            userDb.LoginMethod = user.LoginMethod;
+            userDb.ModifiedDate = DateTimeOffset.Now;
+            userDb.LastLoginDate = DateTimeOffset.Now;
+            _db.SaveChanges();
+            return userDb;
         }
 
         private async Task<Userinfo?> GetUserInfo(string accessToken)

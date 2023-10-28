@@ -32,5 +32,7 @@
 
 
         public List<Notebook> Notebooks { get; set; } = new();
+
+        public List<LoginSession> LoginSessions { get; set; } = new();
     }
 }

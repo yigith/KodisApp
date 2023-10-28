@@ -8,6 +8,8 @@
         }
 
         public DbSet<Notebook> Notebooks => Set<Notebook>();
+        public DbSet<NotebookUser> NotebookUsers => Set<NotebookUser>();
         public DbSet<Note> Notes => Set<Note>();
+        public DbSet<LoginSession> LoginSessions => Set<LoginSession>();
     }
 }

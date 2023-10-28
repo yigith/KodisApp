@@ -3,6 +3,7 @@ using System;
 using KodisApi.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace KodisApi.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20231028183000_NotebookUsersAdded")]
+    partial class NotebookUsersAdded
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,31 +24,6 @@ namespace KodisApi.Data.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
-
-            modelBuilder.Entity("KodisApi.Data.LoginSession", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("CreatedDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("Expires")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<string>("NotebookUserId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("RefreshedDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("NotebookUserId");
-
-                    b.ToTable("LoginSessions");
-                });
 
             modelBuilder.Entity("KodisApi.Data.Note", b =>
                 {
@@ -177,17 +155,6 @@ namespace KodisApi.Data.Migrations
                     b.ToTable("NotebookUsers");
                 });
 
-            modelBuilder.Entity("KodisApi.Data.LoginSession", b =>
-                {
-                    b.HasOne("KodisApi.Data.NotebookUser", "NotebookUser")
-                        .WithMany("LoginSessions")
-                        .HasForeignKey("NotebookUserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("NotebookUser");
-                });
-
             modelBuilder.Entity("KodisApi.Data.Note", b =>
                 {
                     b.HasOne("KodisApi.Data.Notebook", "Notebook")
@@ -215,8 +182,6 @@ namespace KodisApi.Data.Migrations
 
             modelBuilder.Entity("KodisApi.Data.NotebookUser", b =>
                 {
-                    b.Navigation("LoginSessions");
-
                     b.Navigation("Notebooks");
                 });
 #pragma warning restore 612, 618
