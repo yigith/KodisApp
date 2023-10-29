@@ -6,6 +6,7 @@ using Google.Apis.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using static Google.Apis.Auth.GoogleJsonWebSignature;
 
@@ -29,10 +30,30 @@ namespace KodisApi.Controllers
         }
 
         [Authorize, HttpPost("Check")]
-        public IActionResult Get()
+        public IActionResult CheckLogin()
         {
             var isLoggedIn = User.Identity?.IsAuthenticated ?? false;
             var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            return Ok();
+        }
+
+
+        [Authorize, HttpPost("Logout")]
+        public IActionResult Logout()
+        {
+            var sid = User.FindFirst(JwtRegisteredClaimNames.Sid)?.Value;
+
+            if (sid != null)
+            {
+                var loginSession = _db.LoginSessions.Find(sid);
+
+                if (loginSession != null)
+                {
+                    _db.LoginSessions.Remove(loginSession);
+                    _db.SaveChanges();
+                }
+            }
+
             return Ok();
         }
 
