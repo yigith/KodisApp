@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text.RegularExpressions;
 using static Google.Apis.Auth.GoogleJsonWebSignature;
 
 namespace KodisApi.Controllers
@@ -21,6 +22,7 @@ namespace KodisApi.Controllers
         private readonly ApplicationDbContext _db;
 
         private string GoogleClientId => _configuration["Google:ClientId"]!;
+        private NotebookUser? LoggedInNotebookUser => _db.NotebookUsers.Find(User.GetUserId());
 
         public AccountController(IConfiguration configuration, JwtService jwtService, ApplicationDbContext db)
         {
@@ -35,6 +37,51 @@ namespace KodisApi.Controllers
             var isLoggedIn = User.Identity?.IsAuthenticated ?? false;
             var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             return Ok();
+        }
+
+        [Authorize, HttpPost("SetUsername")]
+        public ActionResult<TokensDto> SetUsername(SetUsernameDto dto)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            if (_db.NotebookUsers.Any(u => u.UserName!.ToLowerInvariant() == dto.Username))
+            {
+                ModelState.AddModelError("Username", "Username is already taken.");
+                return BadRequest(ModelState);
+            }
+
+            if (LoggedInNotebookUser == null)
+            {
+                return BadRequest();
+            }
+
+            LoggedInNotebookUser.UserName = dto.Username;
+            _db.SaveChanges();
+
+            var mainNotebook = _db.Notebooks.FirstOrDefault(n => n.NotebookUserId == LoggedInNotebookUser.Id && n.IsMain);
+
+            if (mainNotebook == null)
+            {
+                mainNotebook = new Notebook()
+                {
+                    Slug = "@" + LoggedInNotebookUser.UserName,
+                    IsMain = true,
+                    NotebookUserId = LoggedInNotebookUser.Id,
+                    ExpireDate = DateTimeOffset.MaxValue
+                };
+                _db.Add(mainNotebook);
+                _db.SaveChanges();
+            }
+            else
+            {
+                mainNotebook.Slug = "@" + LoggedInNotebookUser.UserName;
+                _db.SaveChanges();
+            }
+
+            return _jwtService.RefreshJwtToken(dto.RefreshToken);
         }
 
 

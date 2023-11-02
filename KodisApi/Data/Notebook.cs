@@ -16,6 +16,8 @@
         
         public bool IsDeleted { get; set; } = false;
 
+        public bool IsMain { get; set; } = false;
+
         public string? PasswordSalt { get; set; }
 
         public string? ViewPasswordHash { get; set; }
@@ -23,6 +25,7 @@
         public string? EditPasswordHash { get; set; }
 
         public string? NotebookUserId { get; set; }
+
 
 
         public List<Note> Notes { get; set; } = new();

@@ -10,6 +10,7 @@ namespace KodisApi.Controllers
     {
         private readonly ApplicationDbContext _db;
         private readonly NotebookService _notebookService;
+        private NotebookUser? LoggedInNotebookUser => _db.NotebookUsers.Find(User.GetUserId());
 
         public NotebookController(ApplicationDbContext db, NotebookService notebookService)
         {
@@ -57,9 +58,16 @@ namespace KodisApi.Controllers
         [HttpPost("Update/{slug}")]
         public ActionResult<NotebookDto> UpdateNotebook(string slug, UpdateNotebookDto dto)
         {
-            var notebook = _db.Notebooks.Include(x => x.Notes).FirstOrDefault(x => x.Slug == slug);
+            var notebook = _db.Notebooks
+                .Include(x => x.Notes)
+                .FirstOrDefault(x => x.Slug == slug);
+
+
             if (notebook == null)
                 return NotFound();
+
+            if (notebook.NotebookUserId != null &&  notebook.NotebookUserId != LoggedInNotebookUser?.Id)
+                return Unauthorized();
 
             if (dto.Notes.Any(x => !x.IsDeleted && string.IsNullOrWhiteSpace(x.Title)))
                 return BadRequest("Note titles cannot be empty.");
