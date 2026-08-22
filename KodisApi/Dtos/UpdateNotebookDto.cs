@@ -1,9 +1,10 @@
-﻿namespace KodisApi.Dtos
+using System.ComponentModel.DataAnnotations;
+
+namespace KodisApi.Dtos
 {
     public class UpdateNotebookDto
     {
-        public string Slug { get; set; } = null!;
-
+        [Required]
         public List<UpdateNoteDto> Notes { get; set; } = new();
     }
 }

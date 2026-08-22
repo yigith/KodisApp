@@ -1,17 +1,20 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 
 namespace KodisApi.Dtos
 {
     public class UpdateNoteDto
     {
-        // if id is null, then it's a new note
+        /// <summary>Null for a note that does not exist yet.</summary>
         public string? Id { get; set; }
 
-        public string? Title { get; set; } = null!;
+        /// <summary>Required unless <see cref="IsDeleted"/> is true.</summary>
+        [StringLength(50)]
+        public string? Title { get; set; }
 
-        public string? Content { get; set; } = null!;
+        /// <summary>Required unless <see cref="IsDeleted"/> is true.</summary>
+        [StringLength(100_000)]
+        public string? Content { get; set; }
 
-        // if true, title and content can be null
-        public bool IsDeleted { get; set; } = false;
+        public bool IsDeleted { get; set; }
     }
 }

@@ -1,11 +1,14 @@
-﻿namespace KodisApi.Dtos
+using System.ComponentModel.DataAnnotations;
+
+namespace KodisApi.Dtos
 {
     public class GoogleOneTapCredentialResponse
     {
-        public string ClientId { get; set; } = null!;
-
+        [Required]
         public string Credential { get; set; } = null!;
 
-        public string Select_By { get; set; } = null!;
+        public string? ClientId { get; set; }
+
+        public string? Select_By { get; set; }
     }
 }

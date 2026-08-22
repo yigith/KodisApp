@@ -361,3 +361,15 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Local configuration overrides and secrets - never commit these
+appsettings.Local.json
+appsettings.*.Local.json
+.env
+.env.*
+!.env.example
+info.md
+
+# Local SQLite database files
+*.db
+*.db-shm
+*.db-wal
