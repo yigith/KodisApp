@@ -1,11 +1,14 @@
 # Kodis API
 
 Backend for [kod.is](https://kod.is) — shareable notebooks made of notes.
-ASP.NET Core 8 · PostgreSQL · EF Core · Google sign-in · JWT.
+ASP.NET Core 8 · SQLite · EF Core · Google sign-in · JWT.
+
+Live at **https://kodisapi.kod.is**.
 
 ## Running locally
 
-Prerequisites: .NET 8 SDK and a PostgreSQL instance.
+Prerequisites: the .NET 8 SDK. The database is a SQLite file, so there is
+nothing to install or run alongside it.
 
 ```bash
 dotnet restore
@@ -17,7 +20,7 @@ Secrets are **not** in `appsettings.json`. Provide them through user-secrets:
 ```bash
 cd KodisApi
 dotnet user-secrets set "JwtSettings:Secret" "$(openssl rand -base64 64)"
-dotnet user-secrets set "ConnectionStrings:ApplicationDbContext" "Host=localhost;Port=5432;Database=KodisApiDb;Username=postgres;Password=..."
+dotnet user-secrets set "ConnectionStrings:ApplicationDbContext" "Data Source=kodis.db"
 dotnet user-secrets set "Google:ClientId" "your-client-id.apps.googleusercontent.com"
 ```
 
@@ -40,7 +43,7 @@ boot rather than surfacing later as a 500.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `ConnectionStrings:ApplicationDbContext` | PostgreSQL connection string | *(required)* |
+| `ConnectionStrings:ApplicationDbContext` | SQLite connection string, e.g. `Data Source=/var/lib/kodisapi/kodis.db` | *(required)* |
 | `JwtSettings:Secret` | HMAC-SHA256 signing key, ≥32 bytes | *(required)* |
 | `JwtSettings:AccessExpirationTimeInMinutes` | Access token lifetime | `15` |
 | `JwtSettings:RefreshExpirationTimeInMinutes` | Refresh token lifetime | `20160` (14 days) |
@@ -52,25 +55,48 @@ boot rather than surfacing later as a 500.
 | `Notebook:MaxNoteContentLength` | Per-note character cap | `100000` |
 | `Database:MigrateOnStartup` | Apply migrations on boot | `true` in Development |
 | `Hosting:UseHttpsRedirection` | Only enable when this process terminates TLS | `false` |
+| `DataProtection:KeyRingPath` | Where to persist data-protection keys | *(ephemeral if unset)* |
 
 ### Deployment
 
+The VPS runs the API as a systemd service; Caddy terminates TLS and reverse
+proxies `kodisapi.kod.is` to it. Nothing is shared with the other projects on
+that box, which run under PM2.
+
+| | |
+| --- | --- |
+| Binary | `/opt/kodisapi` (self-contained, no .NET runtime needed) |
+| Database + keys | `/var/lib/kodisapi` |
+| Secrets | `/etc/kodisapi/kodisapi.env` (`0640`, owned by `root:kodisapi`) |
+| Service | `kodisapi.service`, runs as the unprivileged `kodisapi` user |
+| Port | `127.0.0.1:3003`, reachable only through Caddy |
+
+To ship a new version:
+
 ```bash
-cd KodisApi
-cp .env.example .env      # fill in real values
-docker compose up -d --build
+./scripts/deploy.sh
 ```
 
-The API listens on `8080` inside the container (mapped to `3333`) and is
-expected to sit behind a TLS-terminating reverse proxy. `X-Forwarded-For` and
-`X-Forwarded-Proto` are honoured, which is what makes per-IP rate limiting
-meaningful.
-
-Migrations are **not** applied on startup in Production. Run them from the
-release pipeline:
+That runs the tests, publishes for `linux-x64`, replaces `/opt/kodisapi`,
+restarts the service and checks `/health`. Secrets on the server are never
+touched.
 
 ```bash
-dotnet ef database update --project KodisApi
+ssh vps systemctl status kodisapi
+ssh vps journalctl -u kodisapi -f
+```
+
+`Database:MigrateOnStartup` is on in production here: with SQLite and a single
+instance there is no second process to race, and it keeps the schema in step
+with the binary that was just deployed.
+
+#### Backups
+
+The whole database is one file. Back it up with SQLite's own command so a
+concurrent write cannot produce a torn copy:
+
+```bash
+ssh vps sqlite3 /var/lib/kodisapi/kodis.db ".backup '/root/kodis-backup.db'"
 ```
 
 ## Authentication
@@ -117,14 +143,13 @@ Anonymous notebooks expire after `Notebook:AnonymousLifetimeInHours` and are
 physically deleted by a background job once past the grace period. A user's
 `@username` notebook never expires.
 
-## Upgrading an existing database
+## Notes on SQLite
 
-The `SecurityHardening` migration adds unique indexes and therefore normalises
-existing rows first: empty `UserName`/`Sub` become `NULL`, slugless notebooks
-get an `orphan-<id>` placeholder, duplicate main notebooks lose the flag, and
-**all login sessions are deleted** (the signing key is rotated as part of this
-change, so every token in circulation was void anyway — clients simply sign in
-again).
+SQLite allows a single writer at a time, so the API must run as **one**
+instance and its database file must never live on a network volume. That is the
+constraint the deployment above is built around.
 
-The migration will fail loudly if two users share an email address; that
-duplicate has to be resolved by hand rather than silently merged.
+Dates are stored as UTC ticks (`INTEGER`) rather than as text. SQLite has no
+native `DateTimeOffset`, and EF Core refuses to translate comparisons against
+the text form — which silently breaks any query that filters on a date. The
+conversion is declared once in `ApplicationDbContext.ConfigureConventions`.

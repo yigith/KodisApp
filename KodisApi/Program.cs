@@ -6,6 +6,7 @@ global using KodisApi.Infrastructure;
 global using KodisApi.Services;
 using KodisApi.Settings;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.OpenApi.Models;
@@ -57,7 +58,22 @@ var connectionString = builder.Configuration.GetConnectionString("ApplicationDbC
 // ---------------------------------------------------------------------------
 // Framework services
 // ---------------------------------------------------------------------------
+// Under systemd this signals readiness (Type=notify) and maps log levels onto
+// journald priorities. It is a no-op everywhere else.
+builder.Host.UseSystemd();
+
 builder.Services.AddSingleton(TimeProvider.System);
+
+// Without a key ring the framework falls back to ephemeral in-memory keys and
+// warns on every start. Nothing here depends on data protection today, but a
+// stable location keeps the logs clean and avoids a surprise later.
+var keyRingPath = builder.Configuration["DataProtection:KeyRingPath"];
+if (!string.IsNullOrWhiteSpace(keyRingPath))
+{
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(keyRingPath))
+        .SetApplicationName("KodisApi");
+}
 
 // Raw JWT claim names are easier to reason about than the WS-Federation
 // aliases the handler substitutes by default.
@@ -93,8 +109,11 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
     .AllowAnyHeader()
     .WithExposedHeaders("Retry-After")));
 
+// SQLite: one file, no server process. The app is deployed as a single
+// instance, which is the constraint that makes this safe - SQLite allows only
+// one writer at a time and must never live on a shared/network volume.
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(connectionString, npgsql => npgsql.EnableRetryOnFailure()));
+    options.UseSqlite(connectionString));
 
 builder.Services.AddSingleton(serviceProvider =>
 {
@@ -115,6 +134,7 @@ builder.Services.AddScoped<JwtService>();
 builder.Services.AddScoped<NotebookService>();
 builder.Services.AddScoped<GoogleAuthService>();
 builder.Services.AddSingleton<NotebookPasswordHasher>();
+builder.Services.AddScoped<DataCleanupService>();
 builder.Services.AddHostedService<ExpiredDataCleanupService>();
 
 builder.Services.AddProblemDetails();

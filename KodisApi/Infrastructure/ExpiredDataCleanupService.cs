@@ -5,8 +5,8 @@ namespace KodisApi.Infrastructure
 {
     /// <summary>
     /// Expired notebooks stop being served immediately but used to stay in the
-    /// database for ever. This removes them (plus dead login sessions) after a
-    /// grace period so the tables do not grow without bound.
+    /// database for ever. This drives <see cref="DataCleanupService"/> on a
+    /// timer so the tables do not grow without bound.
     /// </summary>
     public sealed class ExpiredDataCleanupService : BackgroundService
     {
@@ -36,7 +36,18 @@ namespace KodisApi.Infrastructure
             {
                 try
                 {
-                    await CleanupAsync(stoppingToken);
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    var cleanup = scope.ServiceProvider.GetRequiredService<DataCleanupService>();
+
+                    var cutoff = _timeProvider.GetUtcNow().AddHours(-_settings.CleanupGraceInHours);
+                    var result = await cleanup.RunAsync(cutoff, stoppingToken);
+
+                    if (result.RemovedAnything)
+                    {
+                        _logger.LogInformation(
+                            "Cleanup removed {Notebooks} notebook(s) and {Sessions} login session(s).",
+                            result.Notebooks, result.LoginSessions);
+                    }
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
@@ -49,30 +60,6 @@ namespace KodisApi.Infrastructure
                 }
             }
             while (await timer.WaitForNextTickAsync(stoppingToken));
-        }
-
-        private async Task CleanupAsync(CancellationToken cancellationToken)
-        {
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-
-            var cutoff = _timeProvider.GetUtcNow().AddHours(-_settings.CleanupGraceInHours);
-
-            // Notes go with the notebook through the cascade delete.
-            var notebooks = await db.Notebooks
-                .Where(x => !x.IsMain && (x.IsDeleted || x.ExpireDate < cutoff))
-                .ExecuteDeleteAsync(cancellationToken);
-
-            var sessions = await db.LoginSessions
-                .Where(x => x.Expires < cutoff || (x.RevokedDate != null && x.RevokedDate < cutoff))
-                .ExecuteDeleteAsync(cancellationToken);
-
-            if (notebooks > 0 || sessions > 0)
-            {
-                _logger.LogInformation(
-                    "Cleanup removed {Notebooks} notebook(s) and {Sessions} login session(s).",
-                    notebooks, sessions);
-            }
         }
     }
 }

@@ -367,3 +367,9 @@ appsettings.*.Local.json
 .env
 .env.*
 !.env.example
+info.md
+
+# Local SQLite database files
+*.db
+*.db-shm
+*.db-wal

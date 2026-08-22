@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace KodisApi.Data
 {
@@ -11,6 +12,30 @@ namespace KodisApi.Data
         public DbSet<NotebookUser> NotebookUsers => Set<NotebookUser>();
         public DbSet<Note> Notes => Set<Note>();
         public DbSet<LoginSession> LoginSessions => Set<LoginSession>();
+
+        /// <summary>
+        /// SQLite has no native DateTimeOffset. EF stores it as text and then
+        /// refuses to translate any comparison against it, which silently turns
+        /// every date filter into an unsupported query. Storing UTC ticks makes
+        /// the comparisons plain integer maths - translatable, correctly
+        /// ordered, and index-friendly - with no loss of precision.
+        /// </summary>
+        public sealed class UtcTicksConverter : ValueConverter<DateTimeOffset, long>
+        {
+            public UtcTicksConverter()
+                : base(value => value.UtcDateTime.Ticks,
+                       ticks => new DateTimeOffset(ticks, TimeSpan.Zero))
+            {
+            }
+        }
+
+        protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+        {
+            base.ConfigureConventions(configurationBuilder);
+
+            // Covers DateTimeOffset and DateTimeOffset? across every entity.
+            configurationBuilder.Properties<DateTimeOffset>().HaveConversion<UtcTicksConverter>();
+        }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
