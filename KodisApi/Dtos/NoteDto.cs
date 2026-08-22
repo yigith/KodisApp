@@ -1,5 +1,3 @@
-﻿using System.ComponentModel.DataAnnotations;
-
 namespace KodisApi.Dtos
 {
     public class NoteDto

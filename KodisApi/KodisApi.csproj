@@ -1,33 +1,30 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net7.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>kodis-api-4f1c9a2e-7b6d-4a13-9c8e-2f5b0d7a1e34</UserSecretsId>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Google.Apis.Auth" Version="1.62.1" />
-    <PackageReference Include="Google.Apis.Oauth2.v2" Version="1.62.0.1869" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="7.0.13" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="7.0.10" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="7.0.12" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="7.0.12">
+    <PackageReference Include="Google.Apis.Auth" Version="1.68.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.18" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.18" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.18" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.18">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="7.0.11" />
-    <PackageReference Include="Sqids" Version="3.0.3" />
-    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
+    <PackageReference Include="Sqids" Version="3.1.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="docker-compose.yml">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Update="Dockerfile">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
+    <InternalsVisibleTo Include="KodisApi.Tests" />
   </ItemGroup>
 
 </Project>

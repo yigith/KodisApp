@@ -1,115 +1,234 @@
-﻿using KodisApi.Settings;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+using KodisApi.Exceptions;
+using KodisApi.Infrastructure;
+using KodisApi.Settings;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
+
 
 namespace KodisApi.Services
 {
-    public class JwtService
+    public sealed class JwtService
     {
-        private readonly JwtSettings _jwtSettings;
+        public const string TokenTypeClaim = "token_type";
+        public const string AccessTokenType = "access";
+        public const string RefreshTokenType = "refresh";
+        public const string UsernameClaim = "username";
+
+        private readonly JwtSettings _settings;
         private readonly ApplicationDbContext _db;
-        private readonly IOptionsMonitor<JwtBearerOptions> _jwtBearerOptionsMonitor;
+        private readonly TimeProvider _timeProvider;
+        private readonly ILogger<JwtService> _logger;
 
-        public JwtService(IOptions<JwtSettings> jwtSettings, ApplicationDbContext db, IOptionsMonitor<JwtBearerOptions> jwtBearerOptionsMonitor)
+        public JwtService(
+            IOptions<JwtSettings> settings,
+            ApplicationDbContext db,
+            TimeProvider timeProvider,
+            ILogger<JwtService> logger)
         {
-            _jwtSettings = jwtSettings.Value;
+            _settings = settings.Value;
             _db = db;
-            _jwtBearerOptionsMonitor = jwtBearerOptionsMonitor;
+            _timeProvider = timeProvider;
+            _logger = logger;
         }
 
-        public TokensDto GenerateJwtToken(NotebookUser user, LoginSession loginSession = null!)
-        {
-            if (loginSession == null)
-            {
-                loginSession = new LoginSession()
-                {
-                    NotebookUserId = user.Id,
-                    Expires = DateTime.Now.AddMinutes(_jwtSettings.RefreshExpirationTimeInMinutes),
-                    CreatedDate = DateTimeOffset.Now,
-                    RefreshedDate = DateTimeOffset.Now
-                };
-                _db.LoginSessions.Add(loginSession);
-                _db.SaveChanges();
-            }
+        public SymmetricSecurityKey SigningKey => JwtTokenValidation.CreateSigningKey(_settings);
 
-            var sidClaim = new Claim(JwtRegisteredClaimNames.Sid, loginSession.Id);
-            
-            var claims = new[]
+        /// <summary>
+        /// True when the principal carries a token of the given kind. The two
+        /// token kinds share a signing key, so this claim is what stops a
+        /// refresh token from being replayed as a bearer credential.
+        /// </summary>
+        public static bool HasTokenType(ClaimsPrincipal principal, string tokenType) =>
+            string.Equals(
+                principal.FindFirst(TokenTypeClaim)?.Value, tokenType, StringComparison.Ordinal);
+
+        /// <summary>Starts a brand new login session for the user.</summary>
+        public async Task<TokensDto> CreateSessionAsync(NotebookUser user, CancellationToken cancellationToken = default)
+        {
+            var now = _timeProvider.GetUtcNow();
+
+            var session = new LoginSession
             {
-                sidClaim,
-                new Claim(JwtRegisteredClaimNames.Sub, user.Id),
-                new Claim(ClaimTypes.NameIdentifier, user.Id),
-                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-                new Claim(JwtRegisteredClaimNames.Name, user.FullName!),
-                new Claim(JwtRegisteredClaimNames.GivenName, user.GivenName!),
-                new Claim(JwtRegisteredClaimNames.FamilyName, user.FamilyName!),
-                new Claim(JwtRegisteredClaimNames.Email, user.Email!),
-                new Claim("username", user.UserName!),
-                new Claim("picture", user.Picture!),
-                new Claim("locale", user.Locale!)
+                NotebookUserId = user.Id,
+                Expires = now.AddMinutes(_settings.RefreshExpirationTimeInMinutes),
+                CreatedDate = now,
+                RefreshedDate = now
             };
 
-            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.Secret));
-            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+            _db.LoginSessions.Add(session);
+            await _db.SaveChangesAsync(cancellationToken);
 
-            var accessToken = new JwtSecurityToken(
-                _jwtSettings.Issuer,
-                _jwtSettings.Audience,
-                claims,
-                expires: DateTime.Now.AddMinutes(_jwtSettings.AccessExpirationTimeInMinutes),
-                signingCredentials: creds);
+            return IssueTokens(user, session, now);
+        }
 
-            var refreshToken = new JwtSecurityToken(
-                _jwtSettings.Issuer,
-                _jwtSettings.Audience,
-                new[] { sidClaim },
-                expires: loginSession.Expires,
-                signingCredentials: creds);
+        /// <summary>
+        /// Re-issues the token pair for an already authenticated session, used
+        /// when claims baked into the access token change (e.g. the username).
+        /// Rotates the refresh token too, so only one pair is ever live.
+        /// </summary>
+        public async Task<TokensDto> ReissueForSessionAsync(string sessionId, CancellationToken cancellationToken = default)
+        {
+            var now = _timeProvider.GetUtcNow();
 
-            var tokenHandler = new JwtSecurityTokenHandler();
+            var session = await _db.LoginSessions
+                .Include(x => x.NotebookUser)
+                .FirstOrDefaultAsync(x => x.Id == sessionId, cancellationToken);
 
-            return new TokensDto()
+            if (session is null || !session.IsActive(now))
             {
-                AccessToken = tokenHandler.WriteToken(accessToken),
-                RefreshToken = tokenHandler.WriteToken(refreshToken)
+                throw new UnauthorizedException("The login session is no longer valid.");
+            }
+
+            return await RotateAsync(session, now, cancellationToken);
+        }
+
+        /// <summary>
+        /// Exchanges a refresh token for a fresh pair. The presented token must
+        /// be the newest one issued for its session; replaying an older one is
+        /// treated as theft and kills the session.
+        /// </summary>
+        public async Task<TokensDto> RefreshAsync(string refreshToken, CancellationToken cancellationToken = default)
+        {
+            var now = _timeProvider.GetUtcNow();
+            var handler = CreateHandler();
+
+            ClaimsPrincipal principal;
+            try
+            {
+                principal = handler.ValidateToken(
+                    refreshToken, JwtTokenValidation.BuildParameters(_settings, _timeProvider), out _);
+            }
+            catch (Exception ex) when (ex is SecurityTokenException or ArgumentException)
+            {
+                _logger.LogInformation(ex, "Refresh token rejected during validation.");
+                throw new UnauthorizedException("Invalid refresh token.");
+            }
+
+            if (!HasTokenType(principal, RefreshTokenType))
+            {
+                // An access token would otherwise be accepted here, letting a
+                // short-lived credential mint long-lived ones.
+                _logger.LogInformation("A non-refresh token was presented to the refresh endpoint.");
+                throw new UnauthorizedException("Invalid refresh token.");
+            }
+
+            var sessionId = principal.FindFirst(JwtRegisteredClaimNames.Sid)?.Value;
+            var tokenId = principal.FindFirst(JwtRegisteredClaimNames.Jti)?.Value;
+
+            if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(tokenId))
+            {
+                throw new UnauthorizedException("Invalid refresh token.");
+            }
+
+            var session = await _db.LoginSessions
+                .Include(x => x.NotebookUser)
+                .FirstOrDefaultAsync(x => x.Id == sessionId, cancellationToken);
+
+            if (session is null || !session.IsActive(now))
+            {
+                throw new UnauthorizedException("Invalid refresh token.");
+            }
+
+            if (!string.Equals(session.RefreshTokenId, tokenId, StringComparison.Ordinal))
+            {
+                // The token was valid once but has already been rotated away.
+                // Either it leaked or a client is replaying it - drop the session.
+                _logger.LogWarning(
+                    "Refresh token reuse detected for session {SessionId}; revoking it.", session.Id);
+                session.RevokedDate = now;
+                await _db.SaveChangesAsync(cancellationToken);
+                throw new UnauthorizedException("Invalid refresh token.");
+            }
+
+            return await RotateAsync(session, now, cancellationToken);
+        }
+
+        /// <summary>Ends a session; both of its tokens stop working immediately.</summary>
+        public async Task RevokeSessionAsync(string sessionId, CancellationToken cancellationToken = default)
+        {
+            var session = await _db.LoginSessions
+                .FirstOrDefaultAsync(x => x.Id == sessionId, cancellationToken);
+
+            if (session is null || session.RevokedDate != null)
+            {
+                return;
+            }
+
+            session.RevokedDate = _timeProvider.GetUtcNow();
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+
+        private async Task<TokensDto> RotateAsync(LoginSession session, DateTimeOffset now, CancellationToken cancellationToken)
+        {
+            var user = session.NotebookUser
+                ?? await _db.NotebookUsers.FirstOrDefaultAsync(x => x.Id == session.NotebookUserId, cancellationToken)
+                ?? throw new UnauthorizedException("Invalid refresh token.");
+
+            session.RefreshTokenId = Guid.NewGuid().ToString("N");
+            session.RefreshedDate = now;
+            session.Expires = now.AddMinutes(_settings.RefreshExpirationTimeInMinutes);
+            await _db.SaveChangesAsync(cancellationToken);
+
+            return IssueTokens(user, session, now);
+        }
+
+        private TokensDto IssueTokens(NotebookUser user, LoginSession session, DateTimeOffset now)
+        {
+            var credentials = new SigningCredentials(SigningKey, SecurityAlgorithms.HmacSha256);
+            var accessExpiresAt = now.AddMinutes(_settings.AccessExpirationTimeInMinutes);
+
+            var accessClaims = new List<Claim>
+            {
+                new(JwtRegisteredClaimNames.Sub, user.Id),
+                new(JwtRegisteredClaimNames.Sid, session.Id),
+                new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")),
+                new(JwtRegisteredClaimNames.Email, user.Email),
+                new(TokenTypeClaim, AccessTokenType)
+            };
+
+            AddIfPresent(accessClaims, JwtRegisteredClaimNames.Name, user.FullName);
+            AddIfPresent(accessClaims, JwtRegisteredClaimNames.GivenName, user.GivenName);
+            AddIfPresent(accessClaims, JwtRegisteredClaimNames.FamilyName, user.FamilyName);
+            AddIfPresent(accessClaims, UsernameClaim, user.UserName);
+            AddIfPresent(accessClaims, "picture", user.Picture);
+            AddIfPresent(accessClaims, "locale", user.Locale);
+
+            var refreshClaims = new[]
+            {
+                new Claim(JwtRegisteredClaimNames.Sid, session.Id),
+                new Claim(JwtRegisteredClaimNames.Jti, session.RefreshTokenId),
+                new Claim(TokenTypeClaim, RefreshTokenType)
+            };
+
+            var handler = CreateHandler();
+
+            return new TokensDto
+            {
+                AccessToken = handler.WriteToken(new JwtSecurityToken(
+                    _settings.Issuer, _settings.Audience, accessClaims,
+                    notBefore: now.UtcDateTime,
+                    expires: accessExpiresAt.UtcDateTime,
+                    signingCredentials: credentials)),
+                AccessTokenExpiresAt = accessExpiresAt,
+                RefreshToken = handler.WriteToken(new JwtSecurityToken(
+                    _settings.Issuer, _settings.Audience, refreshClaims,
+                    notBefore: now.UtcDateTime,
+                    expires: session.Expires.UtcDateTime,
+                    signingCredentials: credentials)),
+                RefreshTokenExpiresAt = session.Expires
             };
         }
 
-        public TokensDto RefreshJwtToken(string refreshToken)
+        private static void AddIfPresent(ICollection<Claim> claims, string type, string? value)
         {
-            var tokenHandler = new JwtSecurityTokenHandler();
-            var jwtBearerOptions = _jwtBearerOptionsMonitor.Get(JwtBearerDefaults.AuthenticationScheme);
-            var validationParameters = jwtBearerOptions.TokenValidationParameters;  
-
-            var claimsPrincipal = tokenHandler.ValidateToken(refreshToken, validationParameters, out var validatedToken);
-            var sidClaim = claimsPrincipal.FindFirst(JwtRegisteredClaimNames.Sid);
-            if (sidClaim == null)
+            if (!string.IsNullOrEmpty(value))
             {
-                throw new SecurityTokenException("Invalid refresh token");
+                claims.Add(new Claim(type, value));
             }
-            var loginSession = _db.LoginSessions.Find(sidClaim.Value);
-            if (loginSession == null)
-            {
-                throw new SecurityTokenException("Invalid refresh token");
-            }
-            if (loginSession.Expires < DateTime.Now)
-            {
-                throw new SecurityTokenException("Refresh token expired");
-            }
-            loginSession.RefreshedDate = DateTimeOffset.Now;
-            loginSession.Expires = DateTime.Now.AddMinutes(_jwtSettings.RefreshExpirationTimeInMinutes);
-            _db.SaveChanges();
-            var user = _db.NotebookUsers.Find(loginSession.NotebookUserId);
-            if (user == null)
-            {
-                throw new SecurityTokenException("Invalid refresh token");
-            }
-            return GenerateJwtToken(user, loginSession);
         }
+
+        private static JwtSecurityTokenHandler CreateHandler() => new() { MapInboundClaims = false };
     }
 }

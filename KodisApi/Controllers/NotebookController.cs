@@ -1,104 +1,82 @@
-﻿using KodisApi.Dtos;
-using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace KodisApi.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Produces("application/json")]
     public class NotebookController : ControllerBase
     {
-        private readonly ApplicationDbContext _db;
-        private readonly NotebookService _notebookService;
-        private NotebookUser? LoggedInNotebookUser => _db.NotebookUsers.Find(User.GetUserId());
+        /// <summary>
+        /// Header carrying the view or edit password of a protected notebook.
+        /// A header keeps the secret out of URLs and therefore out of access logs.
+        /// </summary>
+        public const string PasswordHeader = "X-Notebook-Password";
 
-        public NotebookController(ApplicationDbContext db, NotebookService notebookService)
+        private readonly NotebookService _notebookService;
+
+        public NotebookController(NotebookService notebookService)
         {
-            _db = db;
             _notebookService = notebookService;
         }
 
+        private string? Password =>
+            Request.Headers.TryGetValue(PasswordHeader, out var value) ? value.ToString() : null;
+
+        /// <summary>
+        /// Anonymous by design: notebooks are shared by link. Authenticating is
+        /// optional and only matters for notebooks that have an owner.
+        /// </summary>
+        [AllowAnonymous]
+        [EnableRateLimiting(RateLimitPolicies.NotebookRead)]
         [HttpGet("{slug}")]
-        public ActionResult<NotebookDto> GetNotebook(string slug)
+        [ProducesResponseType(typeof(NotebookDto), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<ActionResult<NotebookDto>> GetNotebook(string slug, CancellationToken cancellationToken)
         {
-            var notebook = _db.Notebooks
-                .Include(x => x.Notes)
-                .FirstOrDefault(x => x.Slug == slug && x.ExpireDate > DateTimeOffset.Now);
-
-            if (notebook == null)
-                return NotFound();
+            var notebook = await _notebookService.GetForReadAsync(
+                slug, Password, User.GetUserIdOrNull(), cancellationToken);
 
             return Ok(notebook.ToNotebookDto());
         }
 
+        [AllowAnonymous]
+        [EnableRateLimiting(RateLimitPolicies.NotebookWrite)]
         [HttpPost("Create")]
-        public ActionResult<NotebookDto> CreateNotebook(CreateNotebookDto dto)
+        [ProducesResponseType(typeof(NotebookDto), StatusCodes.Status201Created)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<ActionResult<NotebookDto>> CreateNotebook(
+            CreateNotebookDto dto, CancellationToken cancellationToken)
         {
-            if (dto.Notes.Keys.Any(x => x.Trim() == string.Empty))
-                return BadRequest("Note titles cannot be empty.");
+            // Claims the notebook for the caller when they are signed in, so it
+            // is not left as an anonymous notebook anyone can edit.
+            var notebook = await _notebookService.CreateAsync(
+                dto, User.GetUserIdOrNull(), cancellationToken);
 
-            var notebook = new Notebook()
-            {
-                Slug = "",
-                Notes = dto.Notes.Select(x => new Note()
-                {
-                    Title = x.Key,
-                    Content = x.Value
-                }).ToList()
-            };
+            return CreatedAtAction(
+                nameof(GetNotebook),
+                new { slug = notebook.Slug },
+                notebook.ToNotebookDto());
+        }
 
-            _db.Notebooks.Add(notebook);
-            _db.SaveChanges();
-            notebook.Slug = _notebookService.GenerateSlugFromId(notebook.Id);
-            _db.SaveChanges();
+        [AllowAnonymous]
+        [EnableRateLimiting(RateLimitPolicies.NotebookWrite)]
+        [HttpPost("Update/{slug}")]
+        [ProducesResponseType(typeof(NotebookDto), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<ActionResult<NotebookDto>> UpdateNotebook(
+            string slug, UpdateNotebookDto dto, CancellationToken cancellationToken)
+        {
+            var notebook = await _notebookService.UpdateAsync(
+                slug, dto, Password, User.GetUserIdOrNull(), cancellationToken);
 
             return Ok(notebook.ToNotebookDto());
         }
-
-        [HttpPost("Update/{slug}")]
-        public ActionResult<NotebookDto> UpdateNotebook(string slug, UpdateNotebookDto dto)
-        {
-            var notebook = _db.Notebooks
-                .Include(x => x.Notes)
-                .FirstOrDefault(x => x.Slug == slug);
-
-
-            if (notebook == null)
-                return NotFound();
-
-            if (notebook.NotebookUserId != null &&  notebook.NotebookUserId != LoggedInNotebookUser?.Id)
-                return Unauthorized();
-
-            if (dto.Notes.Any(x => !x.IsDeleted && string.IsNullOrWhiteSpace(x.Title)))
-                return BadRequest("Note titles cannot be empty.");
-
-            Note? target = null!;
-            foreach (var note in dto.Notes)
-            {
-                target = notebook.Notes.FirstOrDefault(x => x.Id == note.Id);
-                if (note.IsDeleted && target != null)
-                {
-                    notebook.Notes.Remove(target);
-                }
-                else if (!note.IsDeleted && note.Id == null)
-                {
-                    notebook.Notes.Add(new Note()
-                    {
-                        Title = note.Title ?? "",
-                        Content = note.Content ?? string.Empty
-                    });
-                }
-                else if (!note.IsDeleted && target != null)
-                {
-                    target.Title = note.Title ?? "";
-                    target.Content = note.Content ?? string.Empty;
-                    target.ModifiedDate = DateTimeOffset.Now;
-                }
-            }
-
-            _db.SaveChanges();
-
-            return Ok(notebook.ToNotebookDto());
-        }   
     }
 }

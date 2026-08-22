@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore KodisApp.sln
+
+      - name: Build
+        run: dotnet build KodisApp.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test KodisApp.sln --configuration Release --no-build --verbosity normal
+
+      - name: Check for secrets in appsettings
+        run: |
+          if grep -rEn '"(Secret|Password)"\s*:\s*"[^"]+"' KodisApi/appsettings*.json; then
+            echo "::error::A secret appears to be committed in appsettings. Use user-secrets or environment variables."
+            exit 1
+          fi
+          if grep -rEn 'Password=[^;"]+' KodisApi/appsettings*.json; then
+            echo "::error::A connection-string password appears to be committed in appsettings."
+            exit 1
+          fi
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -f KodisApi/Dockerfile -t kodis-api:ci KodisApi

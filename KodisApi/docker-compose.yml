@@ -1,14 +1,46 @@
-﻿version: '3.8'
-
 services:
-  KodisTest:
-    image: kodis-test-image
-    container_name: kodis-test-container
+  db:
+    image: postgres:16-alpine
+    container_name: kodis-db
     environment:
-      - ASPNETCORE_ENVIRONMENT=Production
-    ports:
-      - "3333:80"
+      POSTGRES_DB: KodisApiDb
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - kodis-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d KodisApiDb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: always
+
+  api:
+    image: kodis-api
+    container_name: kodis-api
     build:
       context: .
       dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # Secrets come from the environment - never from appsettings.json.
+      ConnectionStrings__ApplicationDbContext: >-
+        Host=db;Port=5432;Database=KodisApiDb;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      JwtSettings__Secret: ${JWT_SECRET:?set JWT_SECRET in .env}
+      Google__ClientId: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in .env}
+      Cors__AllowedOrigins__0: ${CORS_ORIGIN:-https://kod.is}
+    ports:
+      - "3333:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: always
+
+volumes:
+  kodis-db-data:
