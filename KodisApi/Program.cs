@@ -221,6 +221,10 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+
+    // There is no route at the root - this is an API. Point a browser that
+    // lands there at the docs instead of a bare 404. Production keeps the 404.
+    app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 }
 else
 {
